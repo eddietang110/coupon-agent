@@ -1,0 +1,13 @@
+{
+  "calls": 35,
+  "prompt_tokens": 29900,
+  "completion_tokens": 31993,
+  "reasoning_tokens": 9842,
+  "cost": 0.015787199999999998,
+  "rows": 242,
+  "rows_short_circuited": 42,
+  "model": "google/gemini-2.5-flash-lite",
+  "batch_size": 8,
+  "tokens_per_row": 255.8,
+  "cost_per_1k_rows_usd": 0.065
+}
