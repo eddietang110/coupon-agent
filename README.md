@@ -241,7 +241,3 @@ out/
 - **Remote-only promptfoo strategies weren't run** (`jailbreak:composite`, `hijacking`, `system-prompt-override`). They need promptfoo cloud generation.
 - **The `human_breach` column hasn't been filled in yet.** With 0 judge disagreements there were no borderline cases to label. A bigger run should produce some.
 - **The regex is still a regex.** Homoglyph and leetspeak handling depends on the model today. A confusables-folding step in `normalize()` would move that coverage into the deterministic layer.
-
-<div align="center">
-<sub>Built for DSO 429</sub>
-</div>
