@@ -27,13 +27,13 @@ MIN_REVIEW_CHARS = 20
 
 
 def load_key():
-    k = os.environ.get("OPENROUTER_API_KEY")
+    k = os.environ.get(agent.KEY_ENV)
     if not k and os.path.exists(".env"):
         for line in open(".env"):
-            if line.startswith("OPENROUTER_API_KEY="):
+            if line.startswith(agent.KEY_ENV + "="):
                 k = line.split("=", 1)[1].strip()
     if not k:
-        sys.exit("OPENROUTER_API_KEY not set (put it in .env)")
+        sys.exit(f"{agent.KEY_ENV} not set (put it in .env)")
     return k
 
 
@@ -41,19 +41,12 @@ def blocked(rc, note):
     return ({"send": False, "amt": 0, "rc": rc, "why": "", "msg": "", "conf": 1.0}, [note])
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--limit", type=int, default=0, help="first N rows only (smoke test)")
-    ap.add_argument("--batch", type=int, default=8)
-    ap.add_argument("--workers", type=int, default=6)
-    ap.add_argument("--effort", default="low", choices=["low", "medium", "high"])
-    a = ap.parse_args()
+def process_rows(client, rows, batch=8, workers=6, effort="low"):
+    """Push rows through all three layers. Returns ({id: result}, n_sent_to_model).
 
-    rows = list(csv.DictReader(open(SAMPLE)))
-    if a.limit:
-        rows = rows[:a.limit]
-    client = agent.OpenRouter(load_key())
-
+    Shared by main() and redteam/provider.py so the red team attacks the real pipeline,
+    not a copy of it.
+    """
     results, lock = {}, threading.Lock()
     to_model = []
 
@@ -72,16 +65,14 @@ def main():
         else:
             to_model.append(r)
 
-    batches = [to_model[i:i + a.batch] for i in range(0, len(to_model), a.batch)]
-    print(f"{len(rows)} rows | {len(results)} short-circuited | "
-          f"{len(to_model)} to model in {len(batches)} batches")
+    batches = [to_model[i:i + batch] for i in range(0, len(to_model), batch)]
 
     def handle(batch):
         recs = [guardrails.wrap_untrusted(r["id"], r["review"]) for r in batch]
         decided = {}
         for attempt in range(2):  # one retry: an empty/partial batch is usually
             try:                  # a transient provider hiccup, not a schema bug
-                decided, _ = client.decide(recs, effort=a.effort)
+                decided, _ = client.decide(recs, effort=effort)
             except Exception as e:
                 print(f"  batch failed (attempt {attempt + 1}): {e}", file=sys.stderr)
                 decided = {}
@@ -117,8 +108,27 @@ def main():
                 results[r["id"]] = {"row": r, "raw": raw, "decision": d, "violations": viol,
                                     "caught_by": "model" if model_inj else "", "repaired": repaired}
 
-    with ThreadPoolExecutor(max_workers=a.workers) as ex:
+    with ThreadPoolExecutor(max_workers=workers) as ex:
         list(ex.map(handle, batches))
+    return results, len(to_model)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--limit", type=int, default=0, help="first N rows only (smoke test)")
+    ap.add_argument("--batch", type=int, default=8)
+    ap.add_argument("--workers", type=int, default=6)
+    ap.add_argument("--effort", default="low", choices=["low", "medium", "high"])
+    a = ap.parse_args()
+
+    rows = list(csv.DictReader(open(SAMPLE)))
+    if a.limit:
+        rows = rows[:a.limit]
+    client = agent.OpenRouter(load_key())
+
+    results, n_to_model = process_rows(client, rows, a.batch, a.workers, a.effort)
+    print(f"{len(rows)} rows | {len(rows) - n_to_model} short-circuited | "
+          f"{n_to_model} sent to model")
 
     os.makedirs("out", exist_ok=True)
     fields = ["id", "restaurant", "reviewer", "rating", "followers", "send", "amount_usd",
@@ -150,7 +160,7 @@ def main():
 
     u = client.usage
     u["rows"] = len(rows)
-    u["rows_short_circuited"] = len(rows) - len(to_model)
+    u["rows_short_circuited"] = len(rows) - n_to_model
     u["model"] = client.model
     u["batch_size"] = a.batch
     u["tokens_per_row"] = round((u["prompt_tokens"] + u["completion_tokens"]) / max(1, len(rows)), 1)

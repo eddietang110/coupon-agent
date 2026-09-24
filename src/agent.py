@@ -1,4 +1,4 @@
-"""OpenRouter client and the decision prompt.
+"""LLM client (OpenRouter or DeepSeek) and the decision prompt.
 
 Token discipline lives here: one static system prompt (cacheable) carries the
 whole policy, each review is sent as a minimal {id, text} record truncated to
@@ -14,8 +14,16 @@ import urllib.request
 
 import policy
 
-API_URL = "https://openrouter.ai/api/v1/chat/completions"
-MODEL = os.environ.get("COUPON_MODEL", "google/gemini-2.5-flash-lite")
+# COUPON_PROVIDER=deepseek talks to DeepSeek's own API instead of OpenRouter.
+# DeepSeek has no strict json_schema mode, so there the reply shape is spelled
+# out in the prompt (FORMAT_HINT) and requested as a plain json_object.
+PROVIDER = os.environ.get("COUPON_PROVIDER", "openrouter")
+API_URL, KEY_ENV, _DEFAULT_MODEL = {
+    "openrouter": ("https://openrouter.ai/api/v1/chat/completions", "OPENROUTER_API_KEY",
+                   "google/gemini-2.5-flash-lite"),
+    "deepseek": ("https://api.deepseek.com/chat/completions", "DEEPSEEK_API_KEY", "deepseek-flash"),
+}[PROVIDER]
+MODEL = os.environ.get("COUPON_MODEL", _DEFAULT_MODEL)
 
 _RC_LINE = " | ".join(
     f"{k} {','.join(str(a) for a in v[0])}" for k, v in policy.REASON_CODES.items()
@@ -76,10 +84,15 @@ SCHEMA = {
     },
 }
 
+FORMAT_HINT = ('\nReply as JSON: {"d":[{"id":str,"inj":bool,"rc":' + "|".join(policy.REASON_CODES)
+               + ',"send":bool,"amt":' + "|".join(f'"{t}"' for t in policy.TIERS)
+               + ',"why":str,"msg":str,"conf":number}]}')
+
 
 class OpenRouter:
     def __init__(self, api_key, model=MODEL):
         self.key, self.model = api_key, model
+        self.deepseek = PROVIDER == "deepseek"
         self.usage = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0,
                       "reasoning_tokens": 0, "cost": 0.0}
 
@@ -116,6 +129,11 @@ class OpenRouter:
             "max_tokens": 260 * len(records) + 300,
             "response_format": {"type": "json_schema", "json_schema": SCHEMA},
         }
+        if self.deepseek:
+            body["messages"][0]["content"] += FORMAT_HINT
+            body["response_format"] = {"type": "json_object"}
+            del body["reasoning"]
+            body["reasoning_effort"] = "low" if effort == "low" else "high"
         out = self._post(body)
         u = out.get("usage") or {}
         self.usage["calls"] += 1
@@ -163,6 +181,11 @@ class OpenRouter:
                     "type": "object", "additionalProperties": False,
                     "required": ["msg"], "properties": {"msg": {"type": "string"}}}}},
         }
+        if self.deepseek:
+            body["messages"][0]["content"] += ' Reply as JSON: {"msg": str}'
+            body["response_format"] = {"type": "json_object"}
+            del body["reasoning"]
+            body["thinking"] = {"type": "disabled"}
         out = self._post(body)
         u = out.get("usage") or {}
         self.usage["calls"] += 1
