@@ -1,4 +1,4 @@
-"""Score the run against the four graded dimensions and write out/metrics.json."""
+"""Score the run (injection recall, output violations, payout decisions, token efficiency) and write out/metrics.json."""
 import collections
 import json
 import os
